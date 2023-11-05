@@ -1,10 +1,681 @@
-use std::str::FromStr;
+use lalrpop_util::ErrorRecovery;
+use crate::compiler::parser::{*};
+use either::Either;
 
-grammar;
+grammar<'err, 'input>(errors: &'err mut Vec<ErrorRecovery<usize, TokenKind<'input>, ()>>);
 
-pub Term: i32 = {
-    <n:Num> => n,
-    "(" <t:Term> ")" => t,
-};
+extern {
+    type Location = usize;
+    type Error = ();
 
-Num: i32 = <s:r"[0-9]+"> => i32::from_str(s).unwrap();
+    enum TokenKind<'input> {
+        "function"   => TokenKind::Function,
+        "static"     => TokenKind::Static,
+        "private"    => TokenKind::Private,
+        "suspend"    => TokenKind::Suspend,
+        "native"     => TokenKind::Native,
+        "uncycle"    => TokenKind::Uncycle,
+        "open"       => TokenKind::Open,
+        "new"        => TokenKind::New,
+        "drop"       => TokenKind::Drop,
+        "mutex"      => TokenKind::Mutex,
+        "("          => TokenKind::ParenthesisLeft,
+        ")"          => TokenKind::ParenthesisRight,
+        "{"          => TokenKind::BraceLeft,
+        "}"          => TokenKind::BraceRight,
+        "["          => TokenKind::BracketLeft,
+        "]"          => TokenKind::BracketRight,
+        "class"      => TokenKind::Class,
+        "struct"     => TokenKind::Struct,
+        "interface"  => TokenKind::Interface,
+        "extends"    => TokenKind::Extends,
+        "implements" => TokenKind::Implements,
+        "import"     => TokenKind::Import,
+        "::"         => TokenKind::DoubleColon,
+        ","          => TokenKind::Comma,
+        "loop"       => TokenKind::Loop,
+        "var"        => TokenKind::Var,
+        "let"        => TokenKind::Let,
+        "="          => TokenKind::Equal,
+        "<=>"        => TokenKind::Exchange,
+        "or"         => TokenKind::Or,
+        "and"        => TokenKind::And,
+        "=="         => TokenKind::EqEqual,
+        "=/"         => TokenKind::NotEqual,
+        ">"          => TokenKind::GreaterThan,
+        ">="         => TokenKind::GreaterOrEq,
+        "<"          => TokenKind::LessThan,
+        "<="         => TokenKind::LessOrEq,
+        "+"          => TokenKind::Plus,
+        "-"          => TokenKind::Minus,
+        "*"          => TokenKind::Star,
+        "/"          => TokenKind::Slash,
+        "|"          => TokenKind::VerticalBar,
+        "."          => TokenKind::Dot,
+        "null"       => TokenKind::Null,
+        "?"          => TokenKind::InterrogationMark,
+        "!"          => TokenKind::ExclamationMark,
+        "?:"         => TokenKind::InterrogationElvis,
+        "!:"         => TokenKind::ExclamationElvis,
+        ":"          => TokenKind::Colon,
+        "if"         => TokenKind::If,
+        "else"       => TokenKind::Else,
+        "return"     => TokenKind::Return,
+        "=>"         => TokenKind::FatArrow,
+        "->"         => TokenKind::ThinArrow,
+        literal      => TokenKind::Literal(<&'input str>),
+        ";"          => TokenKind::Semicolon,
+        r"\n+"       => TokenKind::LineFeed,
+        unexpected   => TokenKind::UnexpectedCharactor(<&'input str>)
+    }
+}
+
+pub Program: Program<'input> = {
+    <start_loc: @L> <statements: Statements> <end_loc: @R> => {
+        let program = ProgramAST {
+            statements,
+            span: start_loc..end_loc
+        };
+        Box::new(program)
+    }
+}
+
+Statements: Vec<Statement<'input>> = {
+    EndOfStatement+ <mut repeat: (<Statement> EndOfStatement+)*> <last: Statement?> => match last {
+        Some(last) => {
+            repeat.push(last);
+            repeat
+        },
+        _ => repeat
+    }
+}
+
+Statement: Statement<'input> = {
+    <assignment: Assignment>          => Ok(StatementAST::Assignment(assignment)),
+    <exchange: Exchange>              => Ok(StatementAST::Exchange(exchange)),
+    <import: Import>                  => Ok(StatementAST::Import(import)),
+    <variable_define: VariableDefine> => Ok(StatementAST::VariableDefine(variable_define)),
+    <function_define: FunctionDefine> => Ok(StatementAST::FunctionDefine(function_define)),
+    <struct_define: DataStructDefine> => Ok(StatementAST::DataStructDefine(struct_define)),
+    <drop_statement: DropStatement>   => Ok(StatementAST::DropStatement(drop_statement)),
+    <expression: Expression>          => Ok(StatementAST::Expression(expression)),
+    ! => {
+        let error = <>;
+        errors.push(error.clone());
+        Err(error)
+    }
+}
+
+FunctionDefine: FunctionDefine<'input> = {
+    <start_loc: @L> <attributes: StatementAttribute*> "function" <generics: Generics?> <name: FunctionName>
+    <args: FunctionArguments> <type_tag: TypeTag?> <block: Block> <end_loc: @R> => {
+        FunctionDefine {
+            attributes,
+            generics,
+            name,
+            args,
+            type_tag,
+            block,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+StatementAttribute: StatementAttribute = {
+    <start_loc: @L> "static" <end_loc: @R> => {
+        StatementAttribute::new(StatementAttributeEnum::Static, start_loc..end_loc)
+    },
+    <start_loc: @L> "private" <end_loc: @R> => {
+        StatementAttribute::new(StatementAttributeEnum::Private, start_loc..end_loc)
+    },
+    <start_loc: @L> "suspend" <end_loc: @R> => {
+        StatementAttribute::new(StatementAttributeEnum::Suspend, start_loc..end_loc)
+    },
+    <start_loc: @L> "native" <end_loc: @R> => {
+        StatementAttribute::new(StatementAttributeEnum::Native, start_loc..end_loc)
+    },
+    <start_loc: @L> "uncycle" <end_loc: @R> => {
+        StatementAttribute::new(StatementAttributeEnum::Uncycle, start_loc..end_loc)
+    },
+    <start_loc: @L> "open" <end_loc: @R> => {
+        StatementAttribute::new(StatementAttributeEnum::Open, start_loc..end_loc)
+    }
+}
+
+FunctionName: Either<Identifier, MemoryManageAttribute> = {
+    <identifier: Identifier> => Either::Left(identifier),
+    <attribute: MemoryManageAttribute> => Either::Right(attribute)
+}
+
+MemoryManageAttribute: MemoryManageAttribute = {
+    <start_loc: @L> "new"   <end_loc: @R> => MemoryManageAttribute::new(MemoryManageAttributeEnum::New, start_loc..end_loc),
+    <start_loc: @L> "drop"  <end_loc: @R> => MemoryManageAttribute::new(MemoryManageAttributeEnum::Drop, start_loc..end_loc),
+    <start_loc: @L> "mutex" <end_loc: @R> => MemoryManageAttribute::new(MemoryManageAttributeEnum::Mutex, start_loc..end_loc)
+}
+
+FunctionArguments: Vec<FunctionArgument> = {
+    "(" <args: CommaSeparated<FunctionArgument>> ")" => args
+}
+
+FunctionArgument: FunctionArgument = {
+    <start_loc: @L> <name: Identifier> <type_tag: TypeTag> <end_loc: @R> => {
+        FunctionArgument {
+            name,
+            type_tag,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+DataStructDefine: DataStructDefine<'input> = {
+    <start_loc: @L> <attributes: StatementAttribute*> <kind: DataStructKind> <name: Identifier> <generics: Generics?>
+    <extends: Extends?> <implements: Implements?> <block: Block> <end_loc: @R> => {
+        DataStructDefine {
+            attributes,
+            kind,
+            name,
+            generics,
+            extends,
+            implements,
+            block,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+DataStructKind: DataStructKind = {
+    <start_loc: @L> "class"     <end_loc: @R> => DataStructKind::new(DataStructKindEnum::Class, start_loc..end_loc),
+    <start_loc: @L> "struct"    <end_loc: @R> => DataStructKind::new(DataStructKindEnum::Struct, start_loc..end_loc),
+    <start_loc: @L> "interface" <end_loc: @R> => DataStructKind::new(DataStructKindEnum::Interface, start_loc..end_loc)
+}
+
+Extends: Extends = {
+    <start_loc: @L> "extends" <type_info: TypeInfo> <end_loc: @R> => {
+        Extends {
+            type_info,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+Implements: Implements = {
+    <start_loc: @L> "implements" <type_infos: OneOrMoreCommaSeparated<TypeInfo>> <end_loc: @R> => {
+        Implements {
+            type_infos,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+Import: Import = {
+    <start_loc: @L> "import" <import_path: (<Identifier> "::")*> <elements: ImportElements> <end_loc: @R> => {
+        Import {
+            import_path,
+            elements,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+ImportElements: Vec<Identifier> = {
+    "{" <elements: CommaSeparated<Identifier>> "}" => elements
+}
+
+DropStatement: DropStatement<'input> = {
+    <start_loc: @L> "drop" <uncycle_keyword_span: UncycleKeywordSpan?> <expression: Expression> <end_loc: @R> => {
+        DropStatement {
+            uncycle_keyword_span,
+            expression,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+UncycleKeywordSpan: Range<usize> = {
+    <start_loc: @L> "uncycle" <end_loc: @R> => start_loc..end_loc
+}
+
+Loop: Loop<'input> = {
+    <start_loc: @L> "loop" <block: Block> <end_loc: @R> => {
+        Loop {
+            block,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+Block: Block<'input> = {
+    <start_loc: @L> "{" <program: Program> "}" <end_loc: @R> => {
+        Block {
+            program,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+VariableDefine: VariableDefine<'input> = {
+    <start_loc: @L> <attributes: VariableAttributes> <name: Identifier> <type_tag: TypeTag?>
+    <expression: ("=" <Expression>)?> <end_loc: @R> => {
+        VariableDefine {
+            attributes,
+            name,
+            type_tag,
+            expression,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+VariableAttributes: VariableAttributes = {
+    <statement_attributes: StatementAttribute*> <var_or_let_keyword: VarOrLetKeyword> => {
+        VariableAttributes {
+            statement_attributes,
+            is_var: var_or_let_keyword.value,
+            var_let_span: var_or_let_keyword.span
+        }
+    }
+}
+
+VarOrLetKeyword: Spanned<bool> = {
+    <start_loc: @L> "var" <end_loc: @R> => Spanned::new(true, start_loc..end_loc),
+    <start_loc: @L> "let" <end_loc: @R> => Spanned::new(false, start_loc..end_loc)
+}
+
+Assignment: Assignment<'input> = {
+    <start_loc: @L> <left_expr: Expression> "=" <right_expr: Expression> <end_loc: @R> => {
+        Assignment {
+            left_expr,
+            right_expr,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+Exchange: Exchange<'input> = {
+    <start_loc: @L> <left_expr: Expression> "<=>" <right_expr: Expression> <end_loc: @R> => {
+        Exchange {
+            left_expr,
+            right_expr,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+Expression: Expression<'input> = {
+    <expr: OrExpression>     => Expression::new(ExpressionEnum::OrExpression(expr)),
+    <expr: IfExpression>     => Expression::new(ExpressionEnum::IfExpression(expr)),
+    <expr: ReturnExpression> => Expression::new(ExpressionEnum::ReturnExpression(expr)),
+    <expr: Closure>          => Expression::new(ExpressionEnum::Closure(expr))
+}
+
+OrExpression: OrExpression<'input> = {
+    <start_loc: @L> <left_expr: AndExpression> <right_exprs: OrRightExpr*> <end_loc: @R> => {
+        OrExpression {
+            left_expr,
+            right_exprs,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+OrRightExpr: (OrOperatorSpan, AndExpression<'input>) = {
+    <op_span: OrOperatorSpan> <right_expr: AndExpression> => (op_span, right_expr)
+}
+
+OrOperatorSpan: OrOperatorSpan = {
+    <start_loc: @L> "or" <end_loc: @R> => start_loc..end_loc
+}
+
+AndExpression: AndExpression<'input> = {
+    <start_loc: @L> <left_expr: EQNEExpression> <right_exprs: AndRightExpr*> <end_loc: @R> => {
+        AndExpression {
+            left_expr,
+            right_exprs,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+AndRightExpr: (AndOperatorSpan, EQNEExpression<'input>) = {
+    <op_span: AndOperatorSpan> <right_expr: EQNEExpression> => (op_span, right_expr)
+}
+
+AndOperatorSpan: AndOperatorSpan = {
+    <start_loc: @L> "and" <end_loc: @R> => start_loc..end_loc
+}
+
+EQNEExpression: EQNEExpression<'input> = {
+    <start_loc: @L> <left_expr: CompareExpression> <right_exprs: EQNERightExpr*> <end_loc: @R> => {
+        EQNEExpression {
+            left_expr,
+            right_exprs,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+EQNERightExpr: (EQNECompareKind, CompareExpression<'input>) = {
+    <kind: EQNECompareKind> <right_expr: CompareExpression> => (kind, right_expr)
+}
+
+EQNECompareKind: EQNECompareKind = {
+    <start_loc: @L> "==" <end_loc: @R> => EQNECompareKind::new(EQNECompareKindEnum::Equal, start_loc..end_loc),
+    <start_loc: @L> "=/" <end_loc: @R> => EQNECompareKind::new(EQNECompareKindEnum::NotEqual, start_loc..end_loc)
+}
+
+CompareExpression: CompareExpression<'input> = {
+    <start_loc: @L> <left_expr: AddOrSubExpression> <right_exprs: CompareRightExpr*> <end_loc: @R> => {
+        CompareExpression {
+            left_expr,
+            right_exprs,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+CompareRightExpr: (CompareKind, AddOrSubExpression<'input>) = {
+    <kind: CompareKind> <right_expr: AddOrSubExpression> => (kind, right_expr)
+}
+
+CompareKind: CompareKind = {
+    <start_loc: @L> ">"  <end_loc: @R> => CompareKind::new(CompareKindEnum::GreaterThan, start_loc..end_loc),
+    <start_loc: @L> ">=" <end_loc: @R> => CompareKind::new(CompareKindEnum::GreaterOrEqual, start_loc..end_loc),
+    <start_loc: @L> "<"  <end_loc: @R> => CompareKind::new(CompareKindEnum::LessThan, start_loc..end_loc),
+    <start_loc: @L> "<=" <end_loc: @R> => CompareKind::new(CompareKindEnum::LessOrEqual, start_loc..end_loc)
+}
+
+AddOrSubExpression: AddOrSubExpression<'input> = {
+    <start_loc: @L> <left_expr: MulOrDivExpression> <right_exprs: AddOrSubRightExpr*> <end_loc: @R> => {
+        AddOrSubExpression {
+            left_expr,
+            right_exprs,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+AddOrSubRightExpr: (AddOrSubOp, MulOrDivExpression<'input>) = {
+    <op: AddOrSubOp> <right_expr: MulOrDivExpression> => (op, right_expr)
+}
+
+AddOrSubOp: AddOrSubOp = {
+    <start_loc: @L> "+" <end_loc: @R> => AddOrSubOp::new(AddOrSubOpEnum::Add, start_loc..end_loc),
+    <start_loc: @L> "-" <end_loc: @R> => AddOrSubOp::new(AddOrSubOpEnum::Sub, start_loc..end_loc)
+}
+
+MulOrDivExpression: MulOrDivExpression<'input> = {
+    <start_loc: @L> <left_expr: Factor> <right_exprs: MulOrDivRightExpr*> <end_loc: @R> => {
+        MulOrDivExpression {
+            left_expr,
+            right_exprs,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+MulOrDivRightExpr: (MulOrDivOp, Factor<'input>) = {
+    <op: MulOrDivOp> <right_expr: Factor> => (op, right_expr)
+}
+
+MulOrDivOp: MulOrDivOp = {
+    <start_loc: @L> "*" <end_loc: @R> => MulOrDivOp::new(MulOrDivOpEnum::Mul, start_loc..end_loc),
+    <start_loc: @L> "/" <end_loc: @R> => MulOrDivOp::new(MulOrDivOpEnum::Div, start_loc..end_loc)
+}
+
+Factor: Factor<'input> = {
+    <negative_keyword_span: NegativeKeywordSpan?> <primary: Primary> => {
+        Factor {
+            negative_keyword_span,
+            primary
+        }
+    }
+}
+
+NegativeKeywordSpan: Range<usize> = {
+    <start_loc: @L> "-" <end_loc: @R> => start_loc..end_loc
+}
+
+Primary: Primary<'input> = {
+    <start_loc: @L> <first: PrimaryFirst> <chain: PrimarySecond*> <end_loc: @R> => {
+        Primary {
+            first,
+            chain,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+PrimaryFirst: PrimaryFirst<'input> = {
+    <start_loc: @L> <first_expr: PrimaryFirstExpr> <mapping_operator: MappingOperator?> <end_loc: @R> => {
+        PrimaryFirst {
+            first_expr,
+            mapping_operator,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+PrimaryFirstExpr: Either<(SimplePrimary<'input>, Option<FunctionCall<'input>>), NewExpression<'input>> = {
+    <simple_primary: SimplePrimary> <function_call: FunctionCall?> => Either::Left((simple_primary, function_call)),
+    <new_expression: NewExpression> => Either::Right(new_expression)
+}
+
+PrimarySecond: PrimarySecond<'input> = {
+    <start_loc: @L> <separator_kind: PrimarySeparatorKind> <second_expr: PrimarySecondExpr?> <mapping_operator: MappingOperator?> <end_loc: @R> => {
+        PrimarySecond {
+            separator_kind,
+            second_expr,
+            mapping_operator,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+PrimarySeparatorKind: PrimarySeparatorKind = {
+    <start_loc: @L> "."  <end_loc: @R> => PrimarySeparatorKind::new(PrimarySeparatorKindEnum::Dot, start_loc..end_loc),
+    <start_loc: @L> "::" <end_loc: @R> => PrimarySeparatorKind::new(PrimarySeparatorKindEnum::DoubleColon, start_loc..end_loc)
+}
+
+PrimarySecondExpr: (Identifier, Option<FunctionCall<'input>>) = {
+    <identifier: Identifier> <function_call: FunctionCall?> => (identifier, function_call)
+}
+
+SimplePrimary: SimplePrimary<'input> = {
+    "(" <expression: Expression> ")"     => SimplePrimary::Expression(expression),
+    <identifier: Identifier>             => SimplePrimary::Identifier(identifier),
+    <start_loc: @L> "null" <end_loc: @R> => SimplePrimary::NullKeyword(start_loc..end_loc)
+}
+
+MappingOperator: MappingOperator<'input> = {
+    <start_loc: @L> "?"     <end_loc: @R> => MappingOperator::new(MappingOperatorEnum::NullPropagation, start_loc..end_loc),
+    <start_loc: @L> "?" "!" <end_loc: @R> => MappingOperator::new(MappingOperatorEnum::NullUnwrap, start_loc..end_loc),
+    <start_loc: @L> "!"     <end_loc: @R> => MappingOperator::new(MappingOperatorEnum::ResultPropagation, start_loc..end_loc),
+    <start_loc: @L> "!" "!" <end_loc: @R> => MappingOperator::new(MappingOperatorEnum::ResultUnwrap, start_loc..end_loc),
+    <start_loc: @L> "?:"    <block: Block> <end_loc: @R> => MappingOperator::new(MappingOperatorEnum::NullElvisBlock(block), start_loc..end_loc),
+    <start_loc: @L> "!:"    <block: Block> <end_loc: @R> => MappingOperator::new(MappingOperatorEnum::ResultElvisBlock(block), start_loc..end_loc)
+}
+
+FunctionCall: FunctionCall<'input> = {
+    <start_loc: @L> <generics: FunctionCallGenerics?> <arguments: FunctionCallArguments> <end_loc: @R> => {
+        FunctionCall {
+            generics,
+            arguments,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+FunctionCallGenerics: Generics = {
+    ":" <generics: Generics> => generics
+}
+
+FunctionCallArguments: Vec<Expression<'input>> = {
+    "(" <args: CommaSeparated<Expression>> ")" => args
+}
+
+NewExpression: NewExpression<'input> = {
+    <start_loc: @L> <new_keyword_span: NewKeywordSpan> <uncycle_keyword_span: UncycleKeywordSpan?>
+    <path: OneOrMoreDoubleColonSeparated<Identifier>> <function_call: FunctionCall> <end_loc: @R> => {
+        NewExpression {
+            new_keyword_span,
+            uncycle_keyword_span,
+            path,
+            function_call,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+NewKeywordSpan: Range<usize> = {
+    <start_loc: @L> "new" <end_loc: @R> => start_loc..end_loc
+}
+
+IfExpression: IfExpression<'input> = {
+    <start_loc: @L> <if_statement: IfStatement> <chain: IfChain*> <end_loc: @R> => {
+        IfExpression {
+            if_statement,
+            chain,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+IfStatement: IfStatement<'input> = {
+    <start_loc: @L> "if" <condition: Expression> <block: Block> <end_loc: @R> => {
+        IfStatement {
+            condition,
+            block,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+IfChain: Either<IfStatement<'input>, Block<'input>> = {
+    "else" <if_statement: IfStatement> => Either::Left(if_statement),
+    "else" <block: Block> => Either::Right(block)
+}
+
+ReturnExpression: ReturnExpression<'input> = {
+    <start_loc: @L> <return_keyword_span: ReturnKeywordSpan> <expression: Expression?> <end_loc: @R> => {
+        ReturnExpression {
+            return_keyword_span,
+            expression,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+ReturnKeywordSpan: Range<usize> = {
+    <start_loc: @L> "return" <end_loc: @R> => start_loc..end_loc
+}
+
+Closure: Closure<'input> = {
+    <start_loc: @L> <arguments: ClosureArguments> "=>" <block: ClosureBlock> <end_loc: @L> => {
+        Closure {
+            arguments,
+            block,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+ClosureArguments: ClosureArguments = {
+    <start_loc: @L> "|" <arguments: CommaSeparated<ClosureArgument>> "|" <end_loc: @R> => {
+        ClosureArguments {
+            arguments,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+ClosureArgument: Either<Identifier, FunctionArgument> = {
+    <identifier: Identifier>         => Either::Left(identifier),
+    <function_arg: FunctionArgument> => Either::Right(function_arg)
+}
+
+ClosureBlock: Either<Expression<'input>, Block<'input>> = {
+    <expression: Expression> => Either::Left(expression),
+    <block: Block>           => Either::Right(block)
+}
+
+TypeTag: TypeTag = {
+    <start_loc: @L> <tag_kind: TypeTagKind> <type_info: TypeInfo> <end_loc: @R> => {
+        TypeTag {
+            tag_kind,
+            type_info,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+TypeTagKind: TypeTagKind = {
+    <start_loc: @L> ":"  <end_loc: @R> => TypeTagKind::new(TypeTagKindEnum::Normal, start_loc..end_loc),
+    <start_loc: @L> "->" <end_loc: @R> => TypeTagKind::new(TypeTagKindEnum::ReturnType, start_loc..end_loc)
+}
+
+TypeInfo: TypeInfo = {
+    <start_loc: @L> <name: Identifier> <generics: Generics?> <type_attributes: TypeAttribute*> <end_loc: @R> => {
+        TypeInfo {
+            name,
+            generics,
+            type_attributes,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+TypeAttribute: TypeAttribute = {
+    <start_loc: @L> "?" <end_loc: @R> => TypeAttribute::new(TypeAttributeEnum::Optional, start_loc..end_loc),
+    <start_loc: @L> "!" <generics: Generics?> <end_loc: @R> => TypeAttribute::new(TypeAttributeEnum::Result(generics), start_loc..end_loc)
+}
+
+Generics: Generics = {
+    <start_loc: @L> "<" <elements: TypeInfo+> ">" <end_loc: @R> => {
+        Generics {
+            elements,
+            span: start_loc..end_loc
+        }
+    }
+}
+
+
+CommaSeparated<T>: Vec<T> = {
+    <mut repeat: (<T> ",")*> <last: T?> => match last {
+        Some(last) => {
+            repeat.push(last);
+            repeat
+        },
+        _ => repeat
+    }
+}
+
+OneOrMoreCommaSeparated<T>: Vec<T> = {
+    <mut repeat: (<T> ",")*> <last: T> => {
+        repeat.push(last);
+        repeat
+    }
+}
+
+OneOrMoreDoubleColonSeparated<T>: Vec<T> = {
+    <mut repeat: (<T> "::")*> <last: T> => {
+        repeat.push(last);
+        repeat
+    }
+}
+
+Identifier: Spanned<String> = {
+    <start_loc: @L> <s: literal> <end_loc: @L> => Spanned::new(s.to_string(), start_loc..end_loc)
+}
+
+EndOfStatement: EndOfStatement = {
+    <start_loc: @L> ";" <end_loc: @R> => {
+        EndOfStatement::new(EndOfStatementEnum::Semicolon, start_loc..end_loc)
+    },
+    <lf_span: LineFeed> => {
+        EndOfStatement::new(EndOfStatementEnum::LineFeed, lf_span)
+    }
+}
+
+LineFeed: Range<usize> = {
+    <start_loc: @L> <eol: r"\n+"> <end_loc: @R> => start_loc..end_loc
+}
